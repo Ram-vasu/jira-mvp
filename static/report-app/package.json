@@ -1,0 +1,48 @@
+{
+  "name": "automation-action-custom-ui-static",
+  "private": true,
+  "version": "1.1.6",
+  "homepage": ".",
+  "dependencies": {
+    "@atlaskit/avatar": "^25.6.3",
+    "@atlaskit/button": "^23.9.2",
+    "@atlaskit/checkbox": "^17.2.3",
+    "@atlaskit/css-reset": "^7.3.10",
+    "@atlaskit/datetime-picker": "^17.2.3",
+    "@atlaskit/dynamic-table": "^18.3.12",
+    "@atlaskit/form": "^15.2.0",
+    "@atlaskit/icon": "^29.3.2",
+    "@atlaskit/lozenge": "^13.3.0",
+    "@atlaskit/modal-dialog": "^14.9.3",
+    "@atlaskit/select": "^21.6.3",
+    "@atlaskit/textfield": "^8.2.1",
+    "@forge/bridge": "^5.10.1",
+    "@forge/jira-bridge": "^0.40.0",
+    "jspdf": "^3.0.4",
+    "jspdf-autotable": "^5.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "styled-components": "^6.1.19",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "react-scripts": "^5.0.1"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "eject": "react-scripts eject"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

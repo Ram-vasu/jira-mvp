@@ -1,0 +1,33 @@
+modules:
+  jira:projectPage:
+    - key: developer-report-page
+      resource: main-resource
+      resolver:
+        function: resolver
+      title: Developer Reports
+  jira:globalPage:
+    - key: developer-report-global-page
+      resource: main-resource
+      resolver:
+        function: resolver
+      title: Developer Reports Global
+  function:
+    - key: resolver
+      handler: index.handler
+resources:
+  - key: main-resource
+    path: static/report-app/build
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - read:jira-user
+  content:
+    styles:
+      - unsafe-inline
+app:
+  id: ari:cloud:ecosystem::app/09eb46c2-70fc-4100-9d91-3c742129b8fe
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
