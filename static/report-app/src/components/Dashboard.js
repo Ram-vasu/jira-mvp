@@ -5,6 +5,7 @@ import FilterBar from './FilterBar';
 import ReportTable from './ReportTable';
 import BulkCommentModal from './BulkCommentModal';
 import ExportModal from './ExportModal';
+import ScheduleExportModal from './ScheduleExportModal';
 
 const Dashboard = () => {
     const [filters, setFilters] = useState({});
@@ -13,6 +14,7 @@ const Dashboard = () => {
     const [selectedIssues, setSelectedIssues] = useState([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+    const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
 
     const fetchData = async (currentFilters) => {
         setLoading(true);
@@ -56,6 +58,9 @@ const Dashboard = () => {
                     <Button onClick={() => setIsExportModalOpen(true)}>
                         Export
                     </Button>
+                    <Button onClick={() => setIsScheduleModalOpen(true)}>
+                        Schedule Export
+                    </Button>
                 </div>
                 <div>Total Issues: {rows.length}</div>
             </div>
@@ -73,6 +78,11 @@ const Dashboard = () => {
                 isOpen={isExportModalOpen}
                 onClose={() => setIsExportModalOpen(false)}
                 rows={rows}
+            />
+            <ScheduleExportModal
+                isOpen={isScheduleModalOpen}
+                onClose={() => setIsScheduleModalOpen(false)}
+                currentFilters={filters}
             />
         </div>
     );

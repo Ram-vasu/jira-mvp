@@ -15,14 +15,25 @@ const Label = styled.div`
     margin-bottom: 8px;
 `;
 
+const OPTIONS = ['Key', 'Summary', 'Assignee', 'Status', 'TimeSpent', 'Estimate', 'Exceeded', 'Comments'];
+
 const ExportModal = ({ isOpen, onClose, rows }) => {
     const [format, setFormat] = useState('excel');
     const [commentMode, setCommentMode] = useState('last');
+    const [selectedFields, setSelectedFields] = useState(OPTIONS);
+
+    const toggleField = (field) => {
+        if (selectedFields.includes(field)) {
+            setSelectedFields(selectedFields.filter(f => f !== field));
+        } else {
+            setSelectedFields([...selectedFields, field]);
+        }
+    };
 
     const handleExport = () => {
-        if (format === 'csv') exportToCSV(rows, commentMode);
-        if (format === 'excel') exportToExcel(rows, commentMode);
-        if (format === 'pdf') exportToPDF(rows, commentMode);
+        if (format === 'csv') exportToCSV(rows, commentMode, selectedFields);
+        if (format === 'excel') exportToExcel(rows, commentMode, selectedFields);
+        if (format === 'pdf') exportToPDF(rows, commentMode, selectedFields);
         onClose();
     };
 
@@ -49,7 +60,23 @@ const ExportModal = ({ isOpen, onClose, rows }) => {
                             </div>
                         </Field>
                         <Field>
-                            <Label>Comments</Label>
+                            <Label>Columns</Label>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                {OPTIONS.map(opt => (
+                                    <label key={opt} style={{ display: 'flex', alignItems: 'center' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedFields.includes(opt)}
+                                            onChange={() => toggleField(opt)}
+                                            style={{ marginRight: 8 }}
+                                        />
+                                        {opt}
+                                    </label>
+                                ))}
+                            </div>
+                        </Field>
+                        <Field>
+                            <Label>Comments Detail (if included)</Label>
                             <div>
                                 <label style={{ marginRight: 10 }}>
                                     <input type="radio" checked={commentMode === 'none'} onChange={() => setCommentMode('none')} /> None

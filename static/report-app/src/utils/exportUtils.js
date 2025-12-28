@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 const formatComments = (comments, mode) => {
     if (!comments || comments.length === 0) return '';
@@ -15,21 +15,34 @@ const formatComments = (comments, mode) => {
 // Note: Body parsing depends on Jira ADF structure. Above is simplified for standard paragraph/text.
 // Robust parsing would be recursive but for demo this is fine.
 
-const prepareData = (rows, commentMode) => {
-    return rows.map(row => ({
-        Key: row.key,
-        Summary: row.summary,
-        Assignee: row.assignee?.name || 'Unassigned',
-        Status: row.status,
-        TimeSpent: row.timeSpent,
-        Estimate: row.estimate,
-        Exceeded: row.exceeded ? 'Yes' : 'No',
-        Comments: formatComments(row.comments, commentMode)
-    }));
+const prepareData = (rows, commentMode, selectedFields) => {
+    const data = rows.map(row => {
+        const fullData = {
+            Key: row.key,
+            Summary: row.summary,
+            Assignee: row.assignee?.name || 'Unassigned',
+            Status: row.status,
+            TimeSpent: row.timeSpent,
+            Estimate: row.estimate,
+            Exceeded: row.exceeded ? 'Yes' : 'No',
+            Comments: formatComments(row.comments, commentMode)
+        };
+
+        if (!selectedFields || selectedFields.length === 0) return fullData;
+
+        const filteredData = {};
+        selectedFields.forEach(field => {
+            if (fullData.hasOwnProperty(field)) {
+                filteredData[field] = fullData[field];
+            }
+        });
+        return filteredData;
+    });
+    return data;
 };
 
-export const exportToCSV = (rows, commentMode) => {
-    const data = prepareData(rows, commentMode);
+export const exportToCSV = (rows, commentMode, selectedFields) => {
+    const data = prepareData(rows, commentMode, selectedFields);
     const ws = XLSX.utils.json_to_sheet(data);
     const csv = XLSX.utils.sheet_to_csv(ws);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -42,37 +55,37 @@ export const exportToCSV = (rows, commentMode) => {
     document.body.removeChild(link);
 };
 
-export const exportToExcel = (rows, commentMode) => {
-    const data = prepareData(rows, commentMode);
+export const exportToExcel = (rows, commentMode, selectedFields) => {
+    const data = prepareData(rows, commentMode, selectedFields);
     const ws = XLSX.utils.json_to_sheet(data);
-
-    // Conditional Formatting logic would go here if using a pro library, 
-    // but xlsx basic/community doesn't support writing styles easily without plugins (xlsx-style).
-    // We will just dump data for now.
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Report");
     XLSX.writeFile(wb, "jira_report.xlsx");
 };
 
-export const exportToPDF = (rows, commentMode) => {
+export const exportToPDF = (rows, commentMode, selectedFields) => {
     const doc = new jsPDF();
-    const data = prepareData(rows, commentMode);
-    const columns = Object.keys(data[0]).map(key => ({ header: key, dataKey: key }));
+    const data = prepareData(rows, commentMode, selectedFields);
+    if (data.length === 0) return;
+
+    const headers = Object.keys(data[0]);
 
     doc.text("Developer Report", 14, 15);
 
-    doc.autoTable({
-        head: [Object.keys(data[0])],
+    autoTable(doc, {
+        head: [headers],
         body: data.map(obj => Object.values(obj)),
         startY: 20,
         styles: { fontSize: 8 },
         columnStyles: {
             7: { cellWidth: 50 } // Comments column wider
         },
-        didParseCell: (data) => {
-            if (data.column.index === 6 && data.cell.raw === 'Yes') { // Exceeded column
-                data.cell.styles.textColor = [255, 0, 0];
+        didParseCell: (dataCell) => {
+            // Find "Exceeded" column index dynamically or based on value
+            const header = dataCell.column.raw?.header || dataCell.column.dataKey;
+            if (header === 'Exceeded' && dataCell.cell.raw === 'Yes') {
+                dataCell.cell.styles.textColor = [255, 0, 0];
             }
         }
     });

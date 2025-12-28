@@ -11,9 +11,15 @@ modules:
       resolver:
         function: resolver
       title: Developer Reports Global
+  scheduledTrigger:
+    - key: report-scheduler
+      function: scheduler-function
+      interval: hour
   function:
     - key: resolver
       handler: index.handler
+    - key: scheduler-function
+      handler: index.scheduler
 resources:
   - key: main-resource
     path: static/report-app/build
@@ -22,6 +28,7 @@ permissions:
     - read:jira-work
     - write:jira-work
     - read:jira-user
+    - storage:app
   content:
     styles:
       - unsafe-inline
