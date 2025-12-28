@@ -44,15 +44,9 @@ const prepareData = (rows, commentMode, selectedFields) => {
 export const exportToCSV = (rows, commentMode, selectedFields) => {
     const data = prepareData(rows, commentMode, selectedFields);
     const ws = XLSX.utils.json_to_sheet(data);
-    const csv = XLSX.utils.sheet_to_csv(ws);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", "jira_report.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Report");
+    XLSX.writeFile(wb, "jira_report.csv");
 };
 
 export const exportToExcel = (rows, commentMode, selectedFields) => {
@@ -65,11 +59,20 @@ export const exportToExcel = (rows, commentMode, selectedFields) => {
 };
 
 export const exportToPDF = (rows, commentMode, selectedFields) => {
-    const doc = new jsPDF();
+    // Use landscape for better column fit
+    const doc = new jsPDF({ orientation: 'landscape' });
     const data = prepareData(rows, commentMode, selectedFields);
     if (data.length === 0) return;
 
     const headers = Object.keys(data[0]);
+    const commentsIndex = headers.indexOf('Comments');
+
+    const columnStyles = {};
+    if (commentsIndex !== -1) {
+        // Set a fixed width for comments to force wrapping and prevent overflow
+        // A4 Landscape width is ~297mm. 90mm is substantial but leaves room for other cols.
+        columnStyles[commentsIndex] = { cellWidth: 90 };
+    }
 
     doc.text("Developer Report", 14, 15);
 
@@ -78,13 +81,12 @@ export const exportToPDF = (rows, commentMode, selectedFields) => {
         body: data.map(obj => Object.values(obj)),
         startY: 20,
         styles: { fontSize: 8 },
-        columnStyles: {
-            7: { cellWidth: 50 } // Comments column wider
-        },
+        columnStyles: columnStyles,
         didParseCell: (dataCell) => {
-            // Find "Exceeded" column index dynamically or based on value
-            const header = dataCell.column.raw?.header || dataCell.column.dataKey;
-            if (header === 'Exceeded' && dataCell.cell.raw === 'Yes') {
+            // Robustly find column header
+            const index = dataCell.column.index;
+            const headerName = headers[index];
+            if (headerName === 'Exceeded' && dataCell.cell.raw === 'Yes') {
                 dataCell.cell.styles.textColor = [255, 0, 0];
             }
         }
