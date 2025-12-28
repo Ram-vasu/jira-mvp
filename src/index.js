@@ -10,8 +10,18 @@ resolver.define('getProjects', async (req) => {
 });
 
 resolver.define('getUsers', async (req) => {
-  const query = req.payload.query || '';
-  const response = await asUser().requestJira(route`/rest/api/3/user/search?query=${query}`);
+  const { query, projectKeys } = req.payload || {};
+  let url = route`/rest/api/3/user/search?query=${query || ''}`;
+
+  if (projectKeys && projectKeys.length > 0) {
+    // Use assignable/search for the first project (multis not supported easily in one call but 'search' is broad)
+    // actually user/search is global. user/assignable/search checks permission.
+    // If we want users in a project, assignable multiProjectSearch is best
+    const projectKeysStr = projectKeys.join(',');
+    url = route`/rest/api/3/user/assignable/multiProjectSearch?projectKeys=${projectKeysStr}&query=${query || ''}`;
+  }
+
+  const response = await asUser().requestJira(url);
   const data = await response.json();
   return data.map(u => ({ label: u.displayName, value: u.accountId, avatarUrl: u.avatarUrls['24x24'] }));
 });
@@ -24,12 +34,133 @@ resolver.define('getStatuses', async (req) => {
   return data.map(s => ({ label: s.name, value: s.name }));
 });
 
+resolver.define('getIssueTypes', async (req) => {
+  const response = await asUser().requestJira(route`/rest/api/3/issuetype`);
+  const data = await response.json();
+  // Filter out subtasks if needed, or keep them. Usually people assume standard types. 
+  // Let's keep all for now but maybe filter abstract ones if necessary.
+  return data.map(t => ({ label: t.name, value: t.name, iconUrl: t.iconUrl }));
+});
+
+resolver.define('getPriorities', async (req) => {
+  const response = await asUser().requestJira(route`/rest/api/3/priority`);
+  const data = await response.json();
+  return data.map(p => ({ label: p.name, value: p.name, iconUrl: p.iconUrl }));
+});
+
+resolver.define('getLabels', async (req) => {
+  const { projectKeys } = req.payload || {};
+  let labels = new Set();
+
+  // Method 1: If project context, scan recent issues for labels
+  if (projectKeys && projectKeys.length > 0) {
+    try {
+      const jql = `project in (${projectKeys.map(k => `"${k}"`).join(',')}) AND labels is not EMPTY order by updated DESC`;
+      const response = await asUser().requestJira(route`/rest/api/3/search?jql=${jql}&fields=labels&maxResults=50`);
+      const data = await response.json();
+      if (data.issues) {
+        data.issues.forEach(issue => {
+          if (issue.fields.labels) {
+            issue.fields.labels.forEach(l => labels.add(l));
+          }
+        });
+      }
+    } catch (e) {
+      console.error("Error fetching labels from issues:", e);
+    }
+  }
+
+  // Method 2: JQL Autocomplete (Generic) - often requires query
+  // We can try calling it potentially, or just fallback if we have nothing.
+  if (labels.size === 0) {
+    try {
+      const response = await asUser().requestJira(route`/rest/api/3/jql/autocompletedata/suggestions?fieldName=labels`);
+      const data = await response.json();
+      if (data.results) {
+        data.results.forEach(r => labels.add(r.value));
+      }
+    } catch (e) {
+      console.error("Error fetching labels from autocomplete:", e);
+    }
+  }
+
+  return Array.from(labels).sort().map(l => ({ label: l, value: l }));
+});
+
+resolver.define('getSprints', async (req) => {
+  const { projectKeys } = req.payload || {};
+  let sprints = [];
+
+  if (projectKeys && projectKeys.length > 0) {
+    // Try to find boards for these projects
+    // This is expensive if many projects. Limit to first one or two?
+    // Or use JQL to find future/active sprints?
+    // JQL: project in (A) AND sprint in openSprints() ?
+    // simpler: search boards.
+    try {
+      for (const pKey of projectKeys.slice(0, 3)) { // Limit to 3 projects to avoid timeout
+        const boardResp = await asUser().requestJira(route`/rest/agile/1.0/board?projectKeyOrId=${pKey}`);
+        const boardData = await boardResp.json();
+        if (boardData.values) {
+          for (const board of boardData.values) {
+            // Get sprints for board
+            const sprintResp = await asUser().requestJira(route`/rest/agile/1.0/board/${board.id}/sprint?state=active,future&maxResults=50`);
+            const sprintData = await sprintResp.json();
+            if (sprintData.values) {
+              sprints.push(...sprintData.values);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching sprints via boards', e);
+    }
+  }
+
+  // Fallback or if no project, try generic suggestion (often empty) or just return what we have
+  if (sprints.length === 0) {
+    const response = await asUser().requestJira(route`/rest/api/3/jql/autocompletedata/suggestions?fieldName=sprint`);
+    const data = await response.json();
+    const suggestions = (data.results || []).map(r => ({ label: r.displayName, value: r.value, id: r.value })); // value usually ID
+    return suggestions;
+  }
+
+  // Deduplicate by ID
+  const uniqueSprints = Array.from(new Map(sprints.map(s => [s.id, s])).values());
+
+  return uniqueSprints.map(s => ({ label: s.name, value: s.id }));
+});
+
+resolver.define('getParents', async (req) => {
+  const { projectKeys } = req.payload || {};
+
+  if (projectKeys && projectKeys.length > 0) {
+    // Use JQL to find Epics within the projects.
+    // Note: "issuetype = Epic" works for standard Jira Software projects. 
+    // For Next-Gen (Team-Managed), it usually also works, or might be "issuetype = 'Epic'".
+    const jql = `project in (${projectKeys.map(k => `"${k}"`).join(',')}) AND (issuetype = Epic OR issuetype = "Epic") order by created DESC`;
+    try {
+      const response = await asUser().requestJira(route`/rest/api/3/search?jql=${jql}&fields=summary,key&maxResults=100`);
+      const data = await response.json();
+      return (data.issues || []).map(i => ({ label: `${i.key} - ${i.fields.summary}`, value: i.key }));
+    } catch (e) {
+      console.error("Error fetching parents/epics:", e);
+      return [];
+    }
+  }
+
+  // Fallback to autocomplete if no project selected
+  const response = await asUser().requestJira(route`/rest/api/3/jql/autocompletedata/suggestions?fieldName=parent`);
+  const data = await response.json();
+  return (data.results || []).map(r => ({ label: r.displayName, value: r.value }));
+});
+
 resolver.define('getIssues', async (req) => {
-  const { project, sprint, assignee, status, startDate, endDate, exceededOnly } = req.payload;
+  const { project, sprint, assignee, status, startDate, endDate, exceededOnly, issueType, priority, labels, parent } = req.payload;
   console.log('getIssues Payload:', JSON.stringify(req.payload));
 
   // Reuse the safe JQL builder
-  const jql = buildJql({ project, assignee, status, startDate, endDate, exceededOnly });
+  const jql = buildJql({ project, assignee, status, startDate, endDate, exceededOnly, issueType, priority, labels, parent, sprint });
 
   console.log(`Searching with JQL: ${jql}`);
 
@@ -43,7 +174,7 @@ resolver.define('getIssues', async (req) => {
     },
     body: JSON.stringify({
       jql: jql,
-      fields: ['summary', 'status', 'assignee', 'timetracking', 'worklog', 'comment']
+      fields: ['summary', 'status', 'assignee', 'timetracking', 'worklog', 'comment', 'priority', 'labels', 'parent']
     })
   });
 
@@ -75,7 +206,9 @@ resolver.define('getIssues', async (req) => {
     timeSpentSeconds: issue.fields.timetracking.timeSpentSeconds || 0,
     estimateSeconds: issue.fields.timetracking.originalEstimateSeconds || 0,
     exceeded: (issue.fields.timetracking.timeSpentSeconds || 0) > (issue.fields.timetracking.originalEstimateSeconds || 0),
-    comments: issue.fields.comment ? issue.fields.comment.comments : []
+    comments: issue.fields.comment ? issue.fields.comment.comments : [],
+    priority: issue.fields.priority ? issue.fields.priority.name : '',
+    labels: issue.fields.labels || []
   }));
 });
 
@@ -167,7 +300,7 @@ import * as XLSX from 'xlsx';
 
 // Helper to build JQL (shared logic)
 const buildJql = (filters) => {
-  const { project, assignee, status, startDate, endDate, exceededOnly } = filters;
+  const { project, assignee, status, startDate, endDate, exceededOnly, issueType, priority, labels, parent, sprint } = filters;
   let jqlParts = [];
 
   if (project && Array.isArray(project) && project.length > 0) {
@@ -191,6 +324,48 @@ const buildJql = (filters) => {
 
   if (exceededOnly) {
     jqlParts.push(`workRatio > 100`);
+  }
+
+  // Add Issue Type Filter
+  if (issueType && Array.isArray(issueType) && issueType.length > 0) {
+    const typeList = issueType.filter(t => t && t.value).map(t => `"${t.value}"`).join(',');
+    if (typeList) jqlParts.push(`issuetype in (${typeList})`);
+  }
+
+  // Priority
+  if (priority && Array.isArray(priority) && priority.length > 0) {
+    const list = priority.filter(i => i && i.value).map(i => `"${i.value}"`).join(',');
+    if (list) jqlParts.push(`priority in (${list})`);
+  }
+
+  // Labels
+  if (labels && Array.isArray(labels) && labels.length > 0) {
+    const list = labels.filter(i => i && i.value).map(i => `"${i.value}"`).join(',');
+    if (list) jqlParts.push(`labels in (${list})`);
+  }
+
+  // Sprint
+  if (sprint && Array.isArray(sprint) && sprint.length > 0) {
+    const list = sprint.filter(i => i && i.value).map(i => `${i.value}`).join(','); // values often contain spaces or are IDs, ensure quotes or not? 
+    // Suggestion API values usually come with quotes if needed, but let's be careful. 
+    // Actually, suggestion API 'value' for Sprint is usually the ID or name. If name, it needs quotes. If ID, it doesn't.
+    // Safer to just trust the value provided by suggestion API?
+    // Let's assume passed values are raw and wrap in quotes if they are non-numeric strings? 
+    // Or just blindly map to what we have. API usually returns '123' or 'Sprint Name'. 
+    // Let's use value directly but check quotes.
+    // JQL: sprint in (1, "Sprint Name")
+    const safeList = sprint.map(s => {
+      const val = s.value;
+      // if numeric, return as is. if string, quote it.
+      return isNaN(val) ? `"${val}"` : val;
+    }).join(',');
+    if (safeList) jqlParts.push(`sprint in (${safeList})`);
+  }
+
+  // Parent (Epics)
+  if (parent && Array.isArray(parent) && parent.length > 0) {
+    const list = parent.filter(i => i && i.value).map(i => `"${i.value}"`).join(',');
+    if (list) jqlParts.push(`parent in (${list})`);
   }
 
   let jql = jqlParts.join(' AND ');

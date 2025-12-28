@@ -31,9 +31,17 @@ const Label = styled.label`
 
 const FilterBar = ({ onFilterChange }) => {
     const [project, setProject] = useState([]);
-    const [sprint, setSprint] = useState(null);
+    const [sprint, setSprint] = useState([]);
     const [assignee, setAssignee] = useState([]);
     const [status, setStatus] = useState([]);
+    const [issueType, setIssueType] = useState([]);
+    const [priority, setPriority] = useState([]);
+    const [labels, setLabels] = useState([]);
+    const [parent, setParent] = useState([]);
+
+    // Sprint logic: Re-enable
+
+
     const [startDate, setStartDate] = useState(null);
     const [endDate, setEndDate] = useState(null);
     const [exceededOnly, setExceededOnly] = useState(false);
@@ -41,13 +49,34 @@ const FilterBar = ({ onFilterChange }) => {
     const [projectOptions, setProjectOptions] = useState([]);
     const [assigneeOptions, setAssigneeOptions] = useState([]);
     const [statusOptions, setStatusOptions] = useState([]);
+    const [issueTypeOptions, setIssueTypeOptions] = useState([]);
+    const [priorityOptions, setPriorityOptions] = useState([]);
+    const [labelOptions, setLabelOptions] = useState([]);
+    const [sprintOptions, setSprintOptions] = useState([]);
+    const [parentOptions, setParentOptions] = useState([]);
 
     // Fetch options on mount
+    // Fetch options on mount and when project changes
     useEffect(() => {
-        invoke('getProjects').then(setProjectOptions).catch(console.error);
-        invoke('getUsers', {}).then(setAssigneeOptions).catch(console.error);
-        invoke('getStatuses').then(setStatusOptions).catch(console.error);
-    }, []);
+        // Always fetch projects initially if not loaded (though we usually just want one fetch)
+        if (projectOptions.length === 0) {
+            invoke('getProjects').then(setProjectOptions).catch(console.error);
+        }
+
+        const projectKeys = project.map(p => p.key);
+        const payload = { projectKeys };
+
+        invoke('getUsers', payload).then(setAssigneeOptions).catch(console.error);
+        invoke('getStatuses').then(setStatusOptions).catch(console.error); // Statuses often global or complex to filter per project without knowing board
+        invoke('getIssueTypes').then(setIssueTypeOptions).catch(console.error);
+        invoke('getPriorities').then(setPriorityOptions).catch(console.error);
+        invoke('getLabels').then(setLabelOptions).catch(console.error);
+
+        // Context aware fetches
+        invoke('getSprints', payload).then(setSprintOptions).catch(console.error);
+        invoke('getParents', payload).then(setParentOptions).catch(console.error);
+
+    }, [project]);
 
     const handleApply = () => {
         onFilterChange({
@@ -55,6 +84,10 @@ const FilterBar = ({ onFilterChange }) => {
             sprint,
             assignee,
             status,
+            issueType,
+            priority,
+            labels,
+            parent,
             startDate,
             endDate,
             exceededOnly
@@ -65,7 +98,12 @@ const FilterBar = ({ onFilterChange }) => {
         setProject([]);
         setAssignee([]);
         setStatus([]);
-        setSprint(null);
+        setIssueType([]);
+        setPriority([]);
+        setLabels([]);
+        setSprint([]);
+        setParent([]);
+
         setStartDate(null);
         setEndDate(null);
         setExceededOnly(false);
@@ -86,10 +124,29 @@ const FilterBar = ({ onFilterChange }) => {
                 />
             </FieldGroup>
 
-            {/* Sprint is tricky without board context, leaving as textbox or future improvement. 
-          For now removed or just kept as disabled select until implemented. 
-          Actually, let's remove Sprint from initial scope or just keep mock.
-      */}
+            <FieldGroup>
+                <Label>Sprint</Label>
+                <Select
+                    options={sprintOptions}
+                    placeholder="Select Sprint"
+                    onChange={(val) => setSprint(val || [])}
+                    value={sprint}
+                    isMulti
+                    isClearable
+                />
+            </FieldGroup>
+
+            <FieldGroup>
+                <Label>Parent (Epic)</Label>
+                <Select
+                    options={parentOptions}
+                    placeholder="Select Parent"
+                    onChange={(val) => setParent(val || [])}
+                    value={parent}
+                    isMulti
+                    isClearable
+                />
+            </FieldGroup>
 
             <FieldGroup>
                 <Label>Assignee</Label>
@@ -104,6 +161,18 @@ const FilterBar = ({ onFilterChange }) => {
             </FieldGroup>
 
             <FieldGroup>
+                <Label>Work type</Label>
+                <Select
+                    options={issueTypeOptions}
+                    placeholder="Select Work Type"
+                    onChange={(val) => setIssueType(val || [])}
+                    value={issueType}
+                    isMulti
+                    isClearable
+                />
+            </FieldGroup>
+
+            <FieldGroup>
                 <Label>Status</Label>
                 <Select
                     options={statusOptions}
@@ -111,6 +180,28 @@ const FilterBar = ({ onFilterChange }) => {
                     placeholder="Select Status"
                     onChange={setStatus}
                     value={status}
+                />
+            </FieldGroup>
+
+            <FieldGroup>
+                <Label>Priority</Label>
+                <Select
+                    options={priorityOptions}
+                    isMulti
+                    placeholder="Select Priority"
+                    onChange={setPriority}
+                    value={priority}
+                />
+            </FieldGroup>
+
+            <FieldGroup>
+                <Label>Labels</Label>
+                <Select
+                    options={labelOptions}
+                    isMulti
+                    placeholder="Select Labels"
+                    onChange={setLabels}
+                    value={labels}
                 />
             </FieldGroup>
 
