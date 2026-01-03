@@ -47,7 +47,6 @@ const Dashboard = () => {
 
     return (
         <div style={{ padding: '20px' }}>
-            <h1>Developer Reports</h1>
             <FilterBar onFilterChange={handleFilterChange} />
 
             <div style={{ margin: '16px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

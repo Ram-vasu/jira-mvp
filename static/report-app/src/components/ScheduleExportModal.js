@@ -38,6 +38,7 @@ const ScheduleExportModal = ({ isOpen, onClose, currentFilters }) => {
     const [frequency, setFrequency] = useState('daily');
     const [time, setTime] = useState('09:00');
     const [email, setEmail] = useState('');
+    const [accountId, setAccountId] = useState('');
     const [loading, setLoading] = useState(false);
     const [currentUserEmail, setCurrentUserEmail] = useState('');
     const [selectedFields, setSelectedFields] = useState(OPTIONS);
@@ -45,10 +46,15 @@ const ScheduleExportModal = ({ isOpen, onClose, currentFilters }) => {
     useEffect(() => {
         if (isOpen) {
             // Fetch current user email as default
-            invoke('getCurrentUserEmail').then(email => {
-                if (email) {
-                    setEmail(email);
-                    setCurrentUserEmail(email);
+            invoke('getCurrentUser').then(user => {
+                if (user) {
+                    if (user.email) {
+                        setEmail(user.email);
+                        setCurrentUserEmail(user.email);
+                    }
+                    if (user.accountId) {
+                        setAccountId(user.accountId);
+                    }
                 }
             }).catch(console.error);
         }
@@ -65,12 +71,15 @@ const ScheduleExportModal = ({ isOpen, onClose, currentFilters }) => {
     const handleSchedule = async (shouldClose = true) => {
         setLoading(true);
         try {
+            const finalAccountId = (email === currentUserEmail) ? accountId : null;
+
             const scheduleData = {
                 format,
                 commentMode,
                 frequency,
                 time,
                 email,
+                accountId: finalAccountId,
                 filters: currentFilters,
                 selectedFields,
                 active: true,
@@ -175,18 +184,23 @@ const ScheduleExportModal = ({ isOpen, onClose, currentFilters }) => {
 
                         <Field>
                             <Label>Time (UTC)</Label>
-                            <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+                                <div style={{ fontSize: '0.85em', color: '#666', whiteSpace: 'nowrap' }}>
+                                    Current UTC: {new Date().toISOString().slice(11, 16)}
+                                </div>
+                            </div>
                         </Field>
 
                         <Field>
-                            <Label>Email Recipient</Label>
+                            <Label>Email Recipients (comma separated)</Label>
                             <Input
-                                type="email"
+                                type="text"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
-                                placeholder="user@example.com"
+                                placeholder="user@example.com, manager@example.com"
                             />
-                            <HelperText>Report will be sent to this email address.</HelperText>
+                            <HelperText>Report will be sent to these email addresses.</HelperText>
                         </Field>
 
                     </ModalBody>

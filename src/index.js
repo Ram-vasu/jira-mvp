@@ -1,5 +1,6 @@
 import Resolver from '@forge/resolver';
 import { route, asUser, asApp, storage } from '@forge/api';
+import * as XLSX from 'xlsx';
 
 const resolver = new Resolver();
 
@@ -191,25 +192,45 @@ resolver.define('getIssues', async (req) => {
     return [];
   }
 
-  return data.issues.map(issue => ({
-    id: issue.id,
-    key: issue.key,
-    url: `/browse/${issue.key}`,
-    summary: issue.fields.summary,
-    assignee: issue.fields.assignee ? {
-      name: issue.fields.assignee.displayName,
-      avatarUrl: issue.fields.assignee.avatarUrls['24x24']
-    } : { name: 'Unassigned', avatarUrl: '' },
-    status: issue.fields.status.name,
-    timeSpent: issue.fields.timetracking.timeSpent || '0m',
-    estimate: issue.fields.timetracking.originalEstimate || '0m',
-    timeSpentSeconds: issue.fields.timetracking.timeSpentSeconds || 0,
-    estimateSeconds: issue.fields.timetracking.originalEstimateSeconds || 0,
-    exceeded: (issue.fields.timetracking.timeSpentSeconds || 0) > (issue.fields.timetracking.originalEstimateSeconds || 0),
-    comments: issue.fields.comment ? issue.fields.comment.comments : [],
-    priority: issue.fields.priority ? issue.fields.priority.name : '',
-    labels: issue.fields.labels || []
-  }));
+  return data.issues.map(issue => {
+    // Helper to extract text from ADF
+    const extractText = (bodyObj) => {
+      try {
+        return bodyObj?.content?.[0]?.content?.[0]?.text || ' ';
+      } catch (e) { return ' '; }
+    };
+
+    let lastCommentObj = null;
+    if (issue.fields.comment && issue.fields.comment.comments && issue.fields.comment.comments.length > 0) {
+      const last = issue.fields.comment.comments[issue.fields.comment.comments.length - 1];
+      lastCommentObj = {
+        author: last.author.displayName,
+        body: extractText(last.body)
+      };
+    }
+
+    return {
+      id: issue.id,
+      key: issue.key,
+      url: `/browse/${issue.key}`,
+      summary: issue.fields.summary,
+      assignee: issue.fields.assignee ? {
+        name: issue.fields.assignee.displayName,
+        avatarUrl: issue.fields.assignee.avatarUrls['24x24']
+      } : { name: 'Unassigned', avatarUrl: '' },
+      status: issue.fields.status.name,
+      statusCategory: issue.fields.status.statusCategory ? issue.fields.status.statusCategory.key : 'new',
+      timeSpent: issue.fields.timetracking.timeSpent || '0m',
+      estimate: issue.fields.timetracking.originalEstimate || '0m',
+      timeSpentSeconds: issue.fields.timetracking.timeSpentSeconds || 0,
+      estimateSeconds: issue.fields.timetracking.originalEstimateSeconds || 0,
+      exceeded: (issue.fields.timetracking.timeSpentSeconds || 0) > (issue.fields.timetracking.originalEstimateSeconds || 0),
+      comments: issue.fields.comment ? issue.fields.comment.comments : [],
+      lastComment: lastCommentObj,
+      priority: issue.fields.priority ? issue.fields.priority.name : '',
+      labels: issue.fields.labels || []
+    };
+  });
 });
 
 resolver.define('bulkAddComment', async (req) => {
@@ -276,27 +297,30 @@ resolver.define('bulkAddComment', async (req) => {
   return results;
 });
 
-resolver.define('getCurrentUserEmail', async (req) => {
+resolver.define('getCurrentUser', async (req) => {
   const response = await asUser().requestJira(route`/rest/api/3/myself`);
   const data = await response.json();
-  return data.emailAddress || '';
+  return {
+    accountId: data.accountId,
+    email: data.emailAddress,
+    name: data.displayName
+  };
 });
 
 resolver.define('saveSchedule', async (req) => {
   const schedule = req.payload;
-  // Store schedules in a list. 
-  // Ensure we overwrite existing schedule for this email to prevent duplicates/stale triggers
+  console.log('Saving schedule with payload:', JSON.stringify(schedule));
   const existingSchedules = await storage.get('schedules') || [];
+  // Ensure we overwrite existing schedule for this email to prevent duplicates/stale triggers
   const otherSchedules = existingSchedules.filter(s => s.email !== schedule.email);
 
   const newSchedules = [...otherSchedules, { ...schedule, id: new Date().getTime().toString() }];
   await storage.set('schedules', newSchedules);
-  console.log('Schedule saved:', schedule);
   return { success: true };
 });
 
 
-import * as XLSX from 'xlsx';
+
 
 // Helper to build JQL (shared logic)
 const buildJql = (filters) => {
@@ -555,15 +579,35 @@ const processSchedule = async (schedule) => {
     // Find User to Assign (for notification)
     let accountIdToAssign = null;
     let user = null;
-    try {
-      const userSearchResp = await asApp().requestJira(route`/rest/api/3/user/search?query=${schedule.email}`);
-      const users = await userSearchResp.json();
-      user = users.find(u => u.emailAddress === schedule.email);
-      if (user) {
-        accountIdToAssign = user.accountId;
+
+    // Priority 1: Use accountId if in schedule
+    if (schedule.accountId) {
+      accountIdToAssign = schedule.accountId;
+      console.log(`Using stored accountId for schedule: ${schedule.accountId}`);
+    } else {
+      // Priority 2: Search by email
+      try {
+        console.log(`Searching for user with query: ${schedule.email}`);
+        const userSearchResp = await asApp().requestJira(route`/rest/api/3/user/search?query=${schedule.email}`);
+        const users = await userSearchResp.json();
+
+        // Try exact match first
+        user = users.find(u => u.emailAddress === schedule.email);
+
+        // Fallback: Use first result if it seems reasonable (and is active)
+        if (!user && users.length > 0) {
+          console.log(`Exact email match failed or email hidden. Using first result for query: ${users[0].displayName} (${users[0].accountId})`);
+          user = users[0];
+        }
+
+        if (user) {
+          accountIdToAssign = user.accountId;
+        } else {
+          console.warn(`No user found for email ${schedule.email}`);
+        }
+      } catch (e) {
+        console.error('Error finding user for assignment', e);
       }
-    } catch (e) {
-      console.error('Error finding user for assignment', e);
     }
 
     // Create Task as App
@@ -645,7 +689,7 @@ const processSchedule = async (schedule) => {
     }
 
     // 5. Add Comment as App (triggers notification)
-    if (user) {
+    if (accountIdToAssign) {
       const adfComment = {
         body: {
           type: "doc",
@@ -654,7 +698,7 @@ const processSchedule = async (schedule) => {
             {
               type: "paragraph",
               content: [
-                { type: "mention", attrs: { id: user.accountId, text: "@User", accessLevel: "" } },
+                { type: "mention", attrs: { id: accountIdToAssign, text: "@User" } },
                 { type: "text", text: " Your scheduled report is ready! See the attachment in this ticket." }
               ]
             }
@@ -662,12 +706,17 @@ const processSchedule = async (schedule) => {
         }
       };
 
-      await asApp().requestJira(route`/rest/api/3/issue/${issueId}/comment`, {
+      const commentResp = await asApp().requestJira(route`/rest/api/3/issue/${issueId}/comment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(adfComment)
       });
-      console.log('User mentioned.');
+
+      if (!commentResp.ok) {
+        console.error('Failed to add comment', await commentResp.text());
+      } else {
+        console.log('User mentioned.');
+      }
 
       // 6. Add as Watcher (Triple check)
       const watcherResp = await asApp().requestJira(route`/rest/api/3/issue/${issueId}/watchers`, {
@@ -676,13 +725,15 @@ const processSchedule = async (schedule) => {
           'Accept': 'application/json',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(user.accountId)
+        body: JSON.stringify(accountIdToAssign)
       });
       if (!watcherResp.ok) {
         console.error('Failed to add watcher', await watcherResp.text());
       } else {
         console.log('User added as watcher.');
       }
+    } else {
+      console.warn('Skipping notification: No accountIdToAssign found.');
     }
 
     return { ticket: issueKey };
