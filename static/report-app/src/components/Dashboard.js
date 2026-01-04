@@ -15,6 +15,7 @@ import ScheduleExportModal from './ScheduleExportModal';
 import SaveReportModal from './SaveReportModal';
 import ManageReportsModal from './ManageReportsModal';
 import ColumnPicker from './ColumnPicker';
+import { sortRows } from '../utils/sortUtils';
 
 const Dashboard = () => {
     // Lifted State from ReportTable
@@ -264,6 +265,11 @@ const Dashboard = () => {
         setSortOrder(order);
     };
 
+    // Derived State: Sorted Rows
+    const sortedRows = React.useMemo(() => {
+        return sortRows(rows, sortKey, sortOrder);
+    }, [rows, sortKey, sortOrder]);
+
     return (
         <div style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -299,7 +305,7 @@ const Dashboard = () => {
             </div>
 
             <ReportTable
-                rows={rows}
+                rows={sortedRows}
                 loading={loading}
                 onSelectionChange={handleSelectionChange}
                 selectedIssues={selectedIssues}
@@ -335,7 +341,9 @@ const Dashboard = () => {
             <ExportModal
                 isOpen={isExportModalOpen}
                 onClose={() => setIsExportModalOpen(false)}
-                rows={rows}
+                rows={sortedRows}
+                selectedIssues={selectedIssues}
+                visibleColumnKeys={columnOrder}
             />
 
             <ScheduleExportModal

@@ -17,10 +17,32 @@ const Label = styled.div`
 
 const OPTIONS = ['Key', 'Summary', 'Assignee', 'Status', 'TimeSpent', 'Estimate', 'Exceeded', 'Comments'];
 
-const ExportModal = ({ isOpen, onClose, rows }) => {
+const ExportModal = ({ isOpen, onClose, rows, selectedIssues = [], visibleColumnKeys = [] }) => {
     const [format, setFormat] = useState('excel');
     const [commentMode, setCommentMode] = useState('last');
     const [selectedFields, setSelectedFields] = useState(OPTIONS);
+    const [onlySelected, setOnlySelected] = useState(false);
+
+    // Sync default selection with visible columns from Dashboard
+    React.useEffect(() => {
+        if (isOpen && visibleColumnKeys.length > 0) {
+            const mapped = visibleColumnKeys.map(k => {
+                if (k === 'timeSpent') return 'TimeSpent';
+                if (k === 'key') return 'Key';
+                if (k === 'summary') return 'Summary';
+                if (k === 'assignee') return 'Assignee';
+                if (k === 'status') return 'Status';
+                if (k === 'estimate') return 'Estimate';
+                if (k === 'comment') return 'Comments';
+                return null;
+            }).filter(Boolean);
+
+            // Always add 'Exceeded' if TimeSpent is there, or just default it
+            if (mapped.includes('TimeSpent')) mapped.push('Exceeded');
+
+            setSelectedFields(mapped);
+        }
+    }, [isOpen, visibleColumnKeys]);
 
     const toggleField = (field) => {
         if (selectedFields.includes(field)) {
@@ -31,9 +53,14 @@ const ExportModal = ({ isOpen, onClose, rows }) => {
     };
 
     const handleExport = () => {
-        if (format === 'csv') exportToCSV(rows, commentMode, selectedFields);
-        if (format === 'excel') exportToExcel(rows, commentMode, selectedFields);
-        if (format === 'pdf') exportToPDF(rows, commentMode, selectedFields);
+        let exportRows = rows;
+        if (onlySelected && selectedIssues.length > 0) {
+            exportRows = rows.filter(r => selectedIssues.includes(r.id));
+        }
+
+        if (format === 'csv') exportToCSV(exportRows, commentMode, selectedFields);
+        if (format === 'excel') exportToExcel(exportRows, commentMode, selectedFields);
+        if (format === 'pdf') exportToPDF(exportRows, commentMode, selectedFields);
         onClose();
     };
 
@@ -45,6 +72,21 @@ const ExportModal = ({ isOpen, onClose, rows }) => {
                         <ModalTitle>Export Report</ModalTitle>
                     </ModalHeader>
                     <ModalBody>
+                        <Field>
+                            <Label>Rows to Export</Label>
+                            <div>
+                                <label style={{ display: 'flex', alignItems: 'center' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={onlySelected}
+                                        onChange={(e) => setOnlySelected(e.target.checked)}
+                                        disabled={selectedIssues.length === 0}
+                                        style={{ marginRight: 8 }}
+                                    />
+                                    Export only selected issues ({selectedIssues.length} selected)
+                                </label>
+                            </div>
+                        </Field>
                         <Field>
                             <Label>Format</Label>
                             <div>
