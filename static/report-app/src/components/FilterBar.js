@@ -29,23 +29,52 @@ const Label = styled.label`
   color: #6B778C;
 `;
 
-const FilterBar = ({ onFilterChange }) => {
-    const [project, setProject] = useState([]);
-    const [sprint, setSprint] = useState([]);
-    const [assignee, setAssignee] = useState([]);
-    const [status, setStatus] = useState([]);
-    const [issueType, setIssueType] = useState([]);
-    const [priority, setPriority] = useState([]);
-    const [labels, setLabels] = useState([]);
-    const [parent, setParent] = useState([]);
+const FilterBar = ({ filterState, onFilterChange, onApply }) => {
+    // Destructure values from parent state, defaulting to empty/null
+    const {
+        project = [],
+        sprint = [],
+        assignee = [],
+        status = [],
+        issueType = [],
+        priority = [],
+        labels = [],
+        parent = [],
+        startDate = null,
+        endDate = null,
+        exceededOnly = false
+    } = filterState;
 
-    // Sprint logic: Re-enable
+    // Helper to update a specific field in parent state
+    const handleChange = (field, value) => {
+        onFilterChange({
+            ...filterState,
+            [field]: value
+        });
+    };
 
+    const handleClear = () => {
+        const resetState = {
+            project: [],
+            sprint: [],
+            assignee: [],
+            status: [],
+            issueType: [],
+            priority: [],
+            labels: [],
+            parent: [],
+            startDate: null,
+            endDate: null,
+            exceededOnly: false
+        };
+        onFilterChange(resetState);
+        // Trigger fetch immediately with reset state
+        // We pass the resetState to onApply so the parent knows what to use immediately
+        // instead of waiting for state update.
+        if (onApply) onApply(resetState);
+    };
 
-    const [startDate, setStartDate] = useState(null);
-    const [endDate, setEndDate] = useState(null);
-    const [exceededOnly, setExceededOnly] = useState(false);
-
+    // --- Options State (Internal) ---
     const [projectOptions, setProjectOptions] = useState([]);
     const [assigneeOptions, setAssigneeOptions] = useState([]);
     const [statusOptions, setStatusOptions] = useState([]);
@@ -55,60 +84,51 @@ const FilterBar = ({ onFilterChange }) => {
     const [sprintOptions, setSprintOptions] = useState([]);
     const [parentOptions, setParentOptions] = useState([]);
 
-    // Fetch options on mount
-    // Fetch options on mount and when project changes
+    // Fetch static options on mount
     useEffect(() => {
-        // Always fetch projects initially if not loaded (though we usually just want one fetch)
-        if (projectOptions.length === 0) {
-            invoke('getProjects').then(setProjectOptions).catch(console.error);
-        }
+        const fetchStatic = async () => {
+            try {
+                if (projectOptions.length === 0) {
+                    await invoke('getProjects').then(setProjectOptions);
+                }
+                await Promise.all([
+                    invoke('getStatuses').then(setStatusOptions),
+                    invoke('getIssueTypes').then(setIssueTypeOptions)
+                ]);
+                await Promise.all([
+                    invoke('getPriorities').then(setPriorityOptions),
+                    invoke('getLabels').then(setLabelOptions)
+                ]);
+            } catch (e) {
+                console.error("Error fetching static options", e);
+            }
+        };
+        fetchStatic();
+    }, []);
 
-        const projectKeys = project.map(p => p.key);
-        const payload = { projectKeys };
+    // Fetch context-aware options when project changes
+    // We strictly depend on the project IDs/Keys preventing unnecessary runs if reference changes but content doesn't
+    const projectKeysHash = (project || []).map(p => p.value).join(',');
 
-        invoke('getUsers', payload).then(setAssigneeOptions).catch(console.error);
-        invoke('getStatuses').then(setStatusOptions).catch(console.error); // Statuses often global or complex to filter per project without knowing board
-        invoke('getIssueTypes').then(setIssueTypeOptions).catch(console.error);
-        invoke('getPriorities').then(setPriorityOptions).catch(console.error);
-        invoke('getLabels').then(setLabelOptions).catch(console.error);
+    useEffect(() => {
+        const fetchContextData = async () => {
+            const projectKeys = (project || []).map(p => p.key || p.value); // Handle both formats if necessary
+            // If no projects selected, maybe clear options or fetch global? 
+            // For now, let's assume we fetch generic or empty. 
+            // Previous logic just passed empty list which is fine.
+            const payload = { projectKeys };
 
-        // Context aware fetches
-        invoke('getSprints', payload).then(setSprintOptions).catch(console.error);
-        invoke('getParents', payload).then(setParentOptions).catch(console.error);
-
-    }, [project]);
-
-    const handleApply = () => {
-        onFilterChange({
-            project,
-            sprint,
-            assignee,
-            status,
-            issueType,
-            priority,
-            labels,
-            parent,
-            startDate,
-            endDate,
-            exceededOnly
-        });
-    };
-
-    const handleClear = () => {
-        setProject([]);
-        setAssignee([]);
-        setStatus([]);
-        setIssueType([]);
-        setPriority([]);
-        setLabels([]);
-        setSprint([]);
-        setParent([]);
-
-        setStartDate(null);
-        setEndDate(null);
-        setExceededOnly(false);
-        onFilterChange({});
-    };
+            try {
+                // Throttle this? For now, stable dependency should fix the loop.
+                await invoke('getUsers', payload).then(setAssigneeOptions);
+                await invoke('getSprints', payload).then(setSprintOptions);
+                await invoke('getParents', payload).then(setParentOptions);
+            } catch (e) {
+                console.error("Error fetching context options", e);
+            }
+        };
+        fetchContextData();
+    }, [projectKeysHash]);
 
     return (
         <Container>
@@ -117,7 +137,7 @@ const FilterBar = ({ onFilterChange }) => {
                 <Select
                     options={projectOptions}
                     placeholder="Select Projects"
-                    onChange={(val) => setProject(val || [])}
+                    onChange={(val) => handleChange('project', val || [])}
                     value={project}
                     isMulti
                     isClearable
@@ -129,7 +149,7 @@ const FilterBar = ({ onFilterChange }) => {
                 <Select
                     options={sprintOptions}
                     placeholder="Select Sprint"
-                    onChange={(val) => setSprint(val || [])}
+                    onChange={(val) => handleChange('sprint', val || [])}
                     value={sprint}
                     isMulti
                     isClearable
@@ -141,7 +161,7 @@ const FilterBar = ({ onFilterChange }) => {
                 <Select
                     options={parentOptions}
                     placeholder="Select Parent"
-                    onChange={(val) => setParent(val || [])}
+                    onChange={(val) => handleChange('parent', val || [])}
                     value={parent}
                     isMulti
                     isClearable
@@ -153,7 +173,7 @@ const FilterBar = ({ onFilterChange }) => {
                 <Select
                     options={assigneeOptions}
                     placeholder="Select Assignees"
-                    onChange={(val) => setAssignee(val || [])}
+                    onChange={(val) => handleChange('assignee', val || [])}
                     value={assignee}
                     isMulti
                     isClearable
@@ -165,7 +185,7 @@ const FilterBar = ({ onFilterChange }) => {
                 <Select
                     options={issueTypeOptions}
                     placeholder="Select Work Type"
-                    onChange={(val) => setIssueType(val || [])}
+                    onChange={(val) => handleChange('issueType', val || [])}
                     value={issueType}
                     isMulti
                     isClearable
@@ -178,7 +198,7 @@ const FilterBar = ({ onFilterChange }) => {
                     options={statusOptions}
                     isMulti
                     placeholder="Select Status"
-                    onChange={setStatus}
+                    onChange={(val) => handleChange('status', val || [])}
                     value={status}
                 />
             </FieldGroup>
@@ -189,7 +209,7 @@ const FilterBar = ({ onFilterChange }) => {
                     options={priorityOptions}
                     isMulti
                     placeholder="Select Priority"
-                    onChange={setPriority}
+                    onChange={(val) => handleChange('priority', val || [])}
                     value={priority}
                 />
             </FieldGroup>
@@ -200,7 +220,7 @@ const FilterBar = ({ onFilterChange }) => {
                     options={labelOptions}
                     isMulti
                     placeholder="Select Labels"
-                    onChange={setLabels}
+                    onChange={(val) => handleChange('labels', val || [])}
                     value={labels}
                 />
             </FieldGroup>
@@ -208,7 +228,7 @@ const FilterBar = ({ onFilterChange }) => {
             <FieldGroup style={{ minWidth: '150px' }}>
                 <Label>Start Date</Label>
                 <DatePicker
-                    onChange={setStartDate}
+                    onChange={(val) => handleChange('startDate', val)}
                     value={startDate}
                     locale="en-US"
                 />
@@ -217,7 +237,7 @@ const FilterBar = ({ onFilterChange }) => {
             <FieldGroup style={{ minWidth: '150px' }}>
                 <Label>End Date</Label>
                 <DatePicker
-                    onChange={setEndDate}
+                    onChange={(val) => handleChange('endDate', val)}
                     value={endDate}
                     locale="en-US"
                 />
@@ -227,7 +247,7 @@ const FilterBar = ({ onFilterChange }) => {
                 <Checkbox
                     label="Exceeded Estimates Only"
                     isChecked={exceededOnly}
-                    onChange={(e) => setExceededOnly(e.target.checked)}
+                    onChange={(e) => handleChange('exceededOnly', e.target.checked)}
                 />
             </div>
 
@@ -235,7 +255,7 @@ const FilterBar = ({ onFilterChange }) => {
                 <Button appearance="subtle" onClick={handleClear}>
                     Clear
                 </Button>
-                <Button appearance="primary" onClick={handleApply}>
+                <Button appearance="primary" onClick={onApply}>
                     Apply Filters
                 </Button>
             </div>

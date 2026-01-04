@@ -1,6 +1,8 @@
 import Resolver from '@forge/resolver';
-import { route, asUser, asApp, storage } from '@forge/api';
+import { route, asUser, asApp, storage, startsWith } from '@forge/api';
 import * as XLSX from 'xlsx';
+// Actually standard 'crypto' is available in Node 24.
+import { randomUUID } from 'crypto';
 
 const resolver = new Resolver();
 
@@ -307,6 +309,131 @@ resolver.define('getCurrentUser', async (req) => {
   };
 });
 
+resolver.define('saveReport', async (req) => {
+  const { name, filters, columns, sort, visibility, projectKey } = req.payload;
+
+  // Get current user
+  const accountId = req.context.accountId;
+
+  let id;
+  // Robust ID generation
+  try {
+    id = randomUUID();
+  } catch (e) {
+    id = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  }
+
+  const reportKey = `report:${id}`;
+
+  const report = {
+    id,
+    name,
+    ownerAccountId: accountId,
+    visibility, // 'private', 'project', 'global'
+    projectKey: visibility === 'project' ? projectKey : null,
+    filters,
+    columns,
+    sort,
+    createdAt: new Date().toISOString()
+  };
+
+  await storage.set(reportKey, report);
+  return report;
+});
+
+resolver.define('getReports', async (req) => {
+  const { projectKey } = req.payload || {};
+  const accountId = req.context.accountId;
+
+  console.log(`[getReports] Fetching. Account: ${accountId}`);
+
+  let reports = [];
+  try {
+    // Intentionally fetching everything (limit 100) and manually filtering keys
+    // to bypass potential 'where' clause issues or import mix-ups.
+    const query = storage.query().limit(100);
+    const result = await query.getMany();
+
+    console.log(`[getReports] Raw storage fetch count: ${result.results ? result.results.length : 0}`);
+
+    if (result.results) {
+      result.results.forEach(row => {
+        // Manual key prefix check
+        if (row.key && row.key.indexOf('report:') === 0) {
+          console.log(`[getReports] Found report key: ${row.key}`);
+          if (row.value) reports.push(row.value);
+        }
+      });
+    }
+  } catch (e) {
+    console.error("[getReports] Storage Fatal Error:", e);
+    return [];
+  }
+
+  console.log(`[getReports] Extracted ${reports.length} report objects. Filtering...`);
+
+  // Filter
+  return reports.filter(r => {
+    if (!r) return false;
+
+    // 1. Global: Visible to all
+    if (r.visibility === 'global') return true;
+
+    // 2. Private: Must be owner
+    if (r.visibility === 'private') return r.ownerAccountId === accountId;
+
+    // 3. Project: Visible if in correct project OR if user is owner
+    if (r.visibility === 'project') {
+      return (r.ownerAccountId === accountId) || (projectKey && r.projectKey === projectKey);
+    }
+
+    return false;
+  });
+});
+
+resolver.define('deleteReport', async (req) => {
+  const { reportId } = req.payload;
+  const accountId = req.context.accountId;
+
+  console.log(`[deleteReport] Attempting to delete reportId: ${reportId} for account: ${accountId}`);
+
+  let key = `report:${reportId}`;
+  let report = await storage.get(key);
+
+  if (!report) {
+    console.warn(`[deleteReport] Direct key lookup failed for ${key}. Searching all reports...`);
+
+    // Fallback: search by content ID
+    // This is expensive but necessary if keys became desynchronized
+    const query = storage.query().limit(100);
+    const result = await query.getMany();
+
+    if (result.results) {
+      const match = result.results.find(row => row.value && row.value.id === reportId);
+      if (match) {
+        console.log(`[deleteReport] Found report via scan. Key: ${match.key}`);
+        key = match.key;
+        report = match.value;
+      }
+    }
+  }
+
+  if (!report) {
+    console.error(`[deleteReport] Report not found after scan.`);
+    throw new Error("Report not found");
+  }
+
+  // Permission check: Owner or Admin
+  if (report.ownerAccountId !== accountId) {
+    console.warn(`[deleteReport] Permission denied. Owner: ${report.ownerAccountId}, Requestor: ${accountId}`);
+    throw new Error("You do not have permission to delete this report.");
+  }
+
+  await storage.delete(key);
+  console.log(`[deleteReport] Successfully deleted ${key}`);
+  return { success: true };
+});
+
 resolver.define('saveSchedule', async (req) => {
   const schedule = req.payload;
   console.log('Saving schedule with payload:', JSON.stringify(schedule));
@@ -393,9 +520,11 @@ const buildJql = (filters) => {
   }
 
   let jql = jqlParts.join(' AND ');
-  // Fix for "Unbounded JQL" error: Default to last 30 days if no filters are applied
+  // If no filters, show all issues (ordered by creation). 
+  // Removed strict 30d limit to satisfy "Show all tickets" requirement.
   if (!jql) {
-    jql = 'created >= -30d order by created DESC';
+    // API 400s on just "ORDER BY ...", so we add a catch-all condition
+    jql = 'created is not empty order by created DESC';
   } else {
     jql += ' order by created DESC';
   }

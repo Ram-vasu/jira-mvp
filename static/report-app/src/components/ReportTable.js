@@ -88,18 +88,18 @@ const createHead = (withWidth) => {
 };
 
 
-const ReportTable = ({ rows, loading, selectedIssues, onSelectionChange }) => {
+const ReportTable = ({
+    rows = [],
+    loading,
+    selectedIssues = [],
+    onSelectionChange,
+    columnWidths,
+    onWidthChange,
+    sortKey,
+    sortOrder,
+    onSortChange
+}) => {
     const tableRef = useRef(null);
-    const [columnWidths, setColumnWidths] = useState({
-        select: 5,
-        key: 10,
-        summary: 30,
-        assignee: 15,
-        status: 10,
-        timeSpent: 10,
-        estimate: 10,
-        comment: 10
-    });
 
     const toggleRow = (issueId) => {
         const isSelected = selectedIssues.includes(issueId);
@@ -147,11 +147,11 @@ const ReportTable = ({ rows, loading, selectedIssues, onSelectionChange }) => {
             // Check if next column can handle this delta
             if (startNextWidth - effectiveDelta < 2) return;
 
-            setColumnWidths(prev => ({
-                ...prev,
+            onWidthChange({
+                ...columnWidths,
                 [colKey]: startWidth + effectiveDelta,
                 [nextColKey]: startNextWidth - effectiveDelta
-            }));
+            });
         };
 
         const onMouseUp = () => {
@@ -186,8 +186,8 @@ const ReportTable = ({ rows, loading, selectedIssues, onSelectionChange }) => {
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', position: 'relative' }}>
                         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: '12px' }}>{col.id === 'select' ? (
                             <Checkbox
-                                isChecked={rows.length > 0 && selectedIssues.length === rows.length}
-                                isIndeterminate={selectedIssues.length > 0 && selectedIssues.length < rows.length}
+                                isChecked={(rows || []).length > 0 && (selectedIssues || []).length === (rows || []).length}
+                                isIndeterminate={(selectedIssues || []).length > 0 && (selectedIssues || []).length < (rows || []).length}
                                 onChange={toggleAll}
                             />
                         ) : col.label}</span>
@@ -216,12 +216,10 @@ const ReportTable = ({ rows, loading, selectedIssues, onSelectionChange }) => {
 
     const head = createResizableHead();
 
-    const [sortKey, setSortKey] = useState('created');
-    const [sortOrder, setSortOrder] = useState('DESC');
+    // sortKey and sortOrder are now props
 
     const handleSort = (data) => {
-        setSortKey(data.key);
-        setSortOrder(data.sortOrder);
+        onSortChange(data.key, data.sortOrder);
     };
 
     const sortedRows = [...rows].sort((a, b) => {

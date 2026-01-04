@@ -10,6 +10,7 @@
     "@atlaskit/css-reset": "^7.3.10",
     "@atlaskit/datetime-picker": "^17.2.3",
     "@atlaskit/dynamic-table": "^18.3.12",
+    "@atlaskit/flag": "^17.7.2",
     "@atlaskit/form": "^15.2.0",
     "@atlaskit/icon": "^29.3.2",
     "@atlaskit/lozenge": "^13.3.0",
