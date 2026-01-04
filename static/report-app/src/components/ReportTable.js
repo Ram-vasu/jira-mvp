@@ -97,7 +97,8 @@ const ReportTable = ({
     onWidthChange,
     sortKey,
     sortOrder,
-    onSortChange
+    onSortChange,
+    visibleColumnKeys = ['key', 'summary', 'assignee', 'status', 'timeSpent', 'estimate', 'comment']
 }) => {
     const tableRef = useRef(null);
 
@@ -165,21 +166,66 @@ const ReportTable = ({
         document.body.style.cursor = 'col-resize';
     };
 
+    // Column rendering definitions
+    const columnDefinitions = {
+        key: {
+            label: 'Key',
+            isSortable: true,
+            render: (row) => (
+                <span
+                    style={{ color: '#0052CC', cursor: 'pointer', textDecoration: 'underline' }}
+                    onClick={() => {
+                        const modal = new ViewIssueModal({ context: { issueKey: row.key } });
+                        modal.open();
+                    }}
+                >
+                    {row.key}
+                </span>
+            )
+        },
+        summary: { label: 'Summary', isSortable: true, render: (row) => row.summary },
+        assignee: { label: 'Assignee', isSortable: true, render: (row) => row.assignee?.name || 'Unassigned' },
+        status: {
+            label: 'Status',
+            isSortable: true,
+            render: (row) => (
+                <Lozenge
+                    appearance={
+                        row.exceeded ? 'removed' :
+                            row.statusCategory === 'done' ? 'success' :
+                                row.statusCategory === 'indeterminate' ? 'inprogress' : 'default'
+                    }
+                >
+                    {row.status}
+                </Lozenge>
+            )
+        },
+        timeSpent: { label: 'Time Spent', isSortable: true, render: (row) => row.timeSpent || '-' },
+        estimate: { label: 'Estimate', isSortable: true, render: (row) => row.estimate || '-' },
+        comment: {
+            label: 'Last Comment',
+            isSortable: false,
+            render: (row) => row.lastComment ? (
+                <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '12px' }}>
+                    <strong>{row.lastComment.author}:</strong> {row.lastComment.body}
+                </div>
+            ) : '-'
+        }
+    };
+
     const createResizableHead = () => {
+        // Construct columns list: Select + Visible Columns
         const columns = [
             { id: 'select', label: '' },
-            { id: 'key', label: 'Key' },
-            { id: 'summary', label: 'Summary' },
-            { id: 'assignee', label: 'Assignee' },
-            { id: 'status', label: 'Status' },
-            { id: 'timeSpent', label: 'Time Spent' },
-            { id: 'estimate', label: 'Estimate' },
-            { id: 'comment', label: 'Last Comment' }
+            ...visibleColumnKeys.map(key => ({
+                id: key,
+                label: columnDefinitions[key]?.label || key
+            }))
         ];
 
         return {
             cells: columns.map((col, index) => {
-                const isResizer = index < columns.length - 1; // Last column doesn't need resizer
+                const isResizer = index < columns.length - 1;
                 const nextColId = isResizer ? columns[index + 1].id : null;
 
                 const content = (
@@ -198,16 +244,13 @@ const ReportTable = ({
                                 title="Resize Column"
                             />
                         )}
-                        {/* Visual separator line? DynamicTable has borders. 
-                            The Handle acts as the trigger. 
-                        */}
                     </div>
                 );
 
                 return {
                     key: col.id,
                     content: content,
-                    isSortable: col.id !== 'select' && col.id !== 'comment',
+                    isSortable: col.id !== 'select' && columnDefinitions[col.id]?.isSortable !== false,
                     width: columnWidths[col.id],
                 };
             }),
@@ -216,19 +259,15 @@ const ReportTable = ({
 
     const head = createResizableHead();
 
-    // sortKey and sortOrder are now props
-
     const handleSort = (data) => {
         onSortChange(data.key, data.sortOrder);
     };
 
     const sortedRows = [...rows].sort((a, b) => {
         if (!sortKey) return 0;
-
         let aValue = a[sortKey];
         let bValue = b[sortKey];
 
-        // Handle nested or special fields
         if (sortKey === 'assignee') {
             aValue = a.assignee?.name || '';
             bValue = b.assignee?.name || '';
@@ -240,7 +279,6 @@ const ReportTable = ({
             bValue = b.estimateSeconds || 0;
         }
 
-        // Generic comparison
         if (typeof aValue === 'string') {
             aValue = aValue.toLowerCase();
             bValue = bValue.toLowerCase();
@@ -251,9 +289,8 @@ const ReportTable = ({
         return 0;
     });
 
-    const tableRows = sortedRows.map((row) => ({
-        key: row.id,
-        cells: [
+    const tableRows = sortedRows.map((row) => {
+        const cells = [
             {
                 key: 'select',
                 content: (
@@ -263,68 +300,17 @@ const ReportTable = ({
                     />
                 ),
             },
-            {
-                key: 'key',
-                content: (
-                    <span
-                        style={{ color: '#0052CC', cursor: 'pointer', textDecoration: 'underline' }}
-                        onClick={() => {
-                            const modal = new ViewIssueModal({
-                                context: {
-                                    issueKey: row.key,
-                                },
-                            });
-                            modal.open();
-                        }}
-                    >
-                        {row.key}
-                    </span>
-                ),
-            },
-            {
-                key: 'summary',
-                content: row.summary,
-            },
-            {
-                key: 'assignee',
-                content: row.assignee?.name || 'Unassigned',
-            },
-            {
-                key: 'status',
-                content: (
-                    <Lozenge
-                        appearance={
-                            row.exceeded
-                                ? 'removed'
-                                : row.statusCategory === 'done'
-                                    ? 'success'
-                                    : row.statusCategory === 'indeterminate'
-                                        ? 'inprogress'
-                                        : 'default'
-                        }
-                    >
-                        {row.status}
-                    </Lozenge>
-                ),
-            },
-            {
-                key: 'timeSpent',
-                content: row.timeSpent || '-',
-            },
-            {
-                key: 'estimate',
-                content: row.estimate || '-',
-            },
-            {
-                key: 'comment',
-                content: row.lastComment ? (
-                    <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '12px' }}>
-                        <strong>{row.lastComment.author}:</strong> {row.lastComment.body}
-                    </div>
-                ) : '-',
-            },
-        ],
-    }));
+            ...visibleColumnKeys.map(key => ({
+                key: key,
+                content: columnDefinitions[key] ? columnDefinitions[key].render(row) : null
+            }))
+        ];
+
+        return {
+            key: row.id,
+            cells: cells
+        };
+    });
 
     return (
         <div ref={tableRef} style={{ width: '100%' }}>

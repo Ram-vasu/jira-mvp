@@ -14,6 +14,7 @@ import ExportModal from './ExportModal';
 import ScheduleExportModal from './ScheduleExportModal';
 import SaveReportModal from './SaveReportModal';
 import ManageReportsModal from './ManageReportsModal';
+import ColumnPicker from './ColumnPicker';
 
 const Dashboard = () => {
     // Lifted State from ReportTable
@@ -29,6 +30,22 @@ const Dashboard = () => {
     });
     const [sortKey, setSortKey] = useState('key');
     const [sortOrder, setSortOrder] = useState('DESC');
+
+    // Column Config
+    const defaultColumnOrder = ['key', 'summary', 'assignee', 'status', 'timeSpent', 'estimate', 'comment'];
+    const [columnOrder, setColumnOrder] = useState(defaultColumnOrder);
+    const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false);
+
+    // All available columns def (static)
+    const allColumns = [
+        { id: 'key', label: 'Key' },
+        { id: 'summary', label: 'Summary' },
+        { id: 'assignee', label: 'Assignee' },
+        { id: 'status', label: 'Status' },
+        { id: 'timeSpent', label: 'Time Spent' },
+        { id: 'estimate', label: 'Estimate' },
+        { id: 'comment', label: 'Last Comment' }
+    ];
 
     // Safety list matches ReportTable columns
     const validSortKeys = ['key', 'summary', 'assignee', 'status', 'timeSpent', 'estimate'];
@@ -158,7 +175,12 @@ const Dashboard = () => {
             const report = await invoke('saveReport', {
                 name, visibility, projectKey: projectContext,
                 filters: filterState,
-                columns: columnWidths, sort: { key: sortKey, sortOrder }
+                // Save both widths and order. We need to handle migration from old format which was just widths object.
+                columns: {
+                    widths: columnWidths,
+                    order: columnOrder
+                },
+                sort: { key: sortKey, sortOrder }
             });
             setIsSaveReportModalOpen(false);
 
@@ -183,6 +205,7 @@ const Dashboard = () => {
             };
             setFilterState(resetState);
             setActiveFilters(resetState); // Triggers fetch
+            setColumnOrder(defaultColumnOrder);
             return;
         }
         const report = option.value;
@@ -196,7 +219,20 @@ const Dashboard = () => {
         setActiveFilters(loadedFilters);
 
         // Restore table state
-        if (report.columns) setColumnWidths(report.columns);
+        if (report.columns) {
+            // Check if it's new format { widths, order } or legacy (just widths object)
+            if (report.columns.widths || report.columns.order) {
+                if (report.columns.widths) setColumnWidths(report.columns.widths);
+                if (report.columns.order) setColumnOrder(report.columns.order);
+            } else {
+                // Legacy: it was just widths
+                setColumnWidths(report.columns);
+                setColumnOrder(defaultColumnOrder);
+            }
+        } else {
+            setColumnOrder(defaultColumnOrder);
+        }
+
         // Validate sort key before applying
         if (report.sort && report.sort.key && validSortKeys.includes(report.sort.key)) {
             setSortKey(report.sort.key);
@@ -206,6 +242,10 @@ const Dashboard = () => {
             setSortKey('key');
             setSortOrder('DESC');
         }
+    };
+
+    const handleColumnOrderChange = (newOrder) => {
+        setColumnOrder(newOrder);
     };
 
     const handleReportDeleted = () => {
@@ -240,6 +280,7 @@ const Dashboard = () => {
                     </div>
                     <Button appearance="default" onClick={() => setIsSaveReportModalOpen(true)}>Save View</Button>
                     <Button appearance="subtle" onClick={() => setIsManageReportsModalOpen(true)}>Manage</Button>
+                    <Button onClick={() => setIsColumnPickerOpen(true)}>Columns</Button>
                 </div>
             </div>
 
@@ -267,6 +308,15 @@ const Dashboard = () => {
                 sortKey={sortKey}
                 sortOrder={sortOrder}
                 onSortChange={handleSortChange}
+                visibleColumnKeys={columnOrder}
+            />
+
+            <ColumnPicker
+                isOpen={isColumnPickerOpen}
+                onClose={() => setIsColumnPickerOpen(false)}
+                allColumns={allColumns}
+                activeColumnKeys={columnOrder}
+                onSave={handleColumnOrderChange}
             />
 
             {/* Modals */}
