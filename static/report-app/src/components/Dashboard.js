@@ -351,6 +351,7 @@ const Dashboard = () => {
                 onClose={() => setIsScheduleModalOpen(false)}
                 filters={activeFilters}
                 currentUser={currentUser}
+                addFlag={addFlag}
             />
 
             <SaveReportModal

@@ -599,195 +599,153 @@ const fetchIssuesForScheduler = async (jql) => {
   return data.issues || [];
 };
 
-const processSchedule = async (schedule) => {
-  console.log(`Processing schedule for ${schedule.email}`);
-
-  // 1. Fetch Data
-  const jql = buildJql(schedule.filters);
-  const issues = await fetchIssuesForScheduler(jql);
-
-  if (issues.length === 0) {
-    console.log('No issues found for schedule, skipping.');
-    return { ticket: null, reason: 'No issues found matching the criteria.' };
+// Helper to get issue details for validation
+const getIssue = async (issueKeyOrId) => {
+  try {
+    const response = await asApp().requestJira(route`/rest/api/3/issue/${issueKeyOrId}`);
+    if (response.ok) return await response.json();
+  } catch (e) {
+    console.error('getIssue check failed', e);
   }
+  return null;
+};
 
-  // 2. Generate Excel (SheetJS)
-  const rows = issues.map(issue => {
-    const fullRow = {
-      Key: issue.key,
-      Summary: issue.fields.summary,
-      Assignee: issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned',
-      Status: issue.fields.status.name,
-      TimeSpent: issue.fields.timetracking.timeSpent || '0m',
-      Estimate: issue.fields.timetracking.originalEstimate || '0m',
-      Exceeded: (issue.fields.timetracking.timeSpentSeconds || 0) > (issue.fields.timetracking.originalEstimateSeconds || 0) ? 'Yes' : 'No',
-      Comments: ''
-    };
+const processSchedule = async (schedule) => {
+  try {
+    console.log(`Processing schedule for ${schedule.email}`);
 
-    const extractText = (bodyObj) => {
-      try {
-        // Simplified ADF text extraction
-        return bodyObj?.content?.[0]?.content?.[0]?.text || ' ';
-      } catch (e) { return ' '; }
-    };
+    // 1. Fetch Data
+    const jql = buildJql(schedule.filters);
+    const issues = await fetchIssuesForScheduler(jql);
 
-    // Handle Comments
-    if (schedule.commentMode === 'last' && issue.fields.comment && issue.fields.comment.comments.length > 0) {
-      const lastComment = issue.fields.comment.comments[issue.fields.comment.comments.length - 1];
-      fullRow['Comments'] = `[${lastComment.author.displayName}]: ${extractText(lastComment.body)}`;
-    } else if (schedule.commentMode === 'full' && issue.fields.comment) {
-      fullRow['Comments'] = issue.fields.comment.comments.map(c => `[${c.author.displayName}]: ${extractText(c.body)}`).join('\n---\n');
+    if (issues.length === 0) {
+      console.log('No issues found for schedule, skipping.');
+      return { ticket: null, reason: 'No issues found matching the criteria.' };
     }
 
-    // Filter Fields
-    if (!schedule.selectedFields || schedule.selectedFields.length === 0) return fullRow;
+    // 2. Generate Excel (SheetJS)
+    const rows = issues.map(issue => {
+      const fullRow = {
+        Key: issue.key,
+        Summary: issue.fields.summary,
+        Assignee: issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned',
+        Status: issue.fields.status.name,
+        TimeSpent: issue.fields.timetracking.timeSpent || '0m',
+        Estimate: issue.fields.timetracking.originalEstimate || '0m',
+        Exceeded: (issue.fields.timetracking.timeSpentSeconds || 0) > (issue.fields.timetracking.originalEstimateSeconds || 0) ? 'Yes' : 'No',
+        Comments: ''
+      };
 
-    const filteredRow = {};
-    schedule.selectedFields.forEach(field => {
-      if (fullRow.hasOwnProperty(field)) {
-        filteredRow[field] = fullRow[field];
+      const extractText = (bodyObj) => {
+        try {
+          return bodyObj?.content?.[0]?.content?.[0]?.text || ' ';
+        } catch (e) { return ' '; }
+      };
+
+      if (schedule.commentMode === 'last' && issue.fields.comment && issue.fields.comment.comments.length > 0) {
+        const lastComment = issue.fields.comment.comments[issue.fields.comment.comments.length - 1];
+        fullRow['Comments'] = `[${lastComment.author.displayName}]: ${extractText(lastComment.body)}`;
+      } else if (schedule.commentMode === 'full' && issue.fields.comment) {
+        fullRow['Comments'] = issue.fields.comment.comments.map(c => `[${c.author.displayName}]: ${extractText(c.body)}`).join('\n---\n');
       }
+
+      if (!schedule.selectedFields || schedule.selectedFields.length === 0) return fullRow;
+
+      const filteredRow = {};
+      schedule.selectedFields.forEach(field => {
+        if (fullRow.hasOwnProperty(field)) {
+          filteredRow[field] = fullRow[field];
+        }
+      });
+
+      return filteredRow;
     });
 
-    return filteredRow;
-  });
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
 
-  const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-
-  // 3. Create Issue to Attach To
-  let projectKey = null;
-  if (schedule.filters.project && schedule.filters.project.length > 0) {
-    projectKey = schedule.filters.project[0].key;
-  } else {
-    // Search projects as App
-    const projResp = await asApp().requestJira(route`/rest/api/3/project/search?maxResults=1`);
-    const projData = await projResp.json();
-    if (projData.values && projData.values.length > 0) {
-      projectKey = projData.values[0].key;
-    }
-  }
-
-  if (!projectKey) {
-    console.error('Could not find a project key to create report issue.');
-    return { ticket: null, reason: 'Could not find a valid project to create the report ticket.' };
-  }
-
-  try {
-    // Fetch valid issue types as App
-    const metaResp = await asApp().requestJira(route`/rest/api/3/issue/createmeta?projectKeys=${projectKey}`);
-    const metaData = await metaResp.json();
-
-    let issueTypeId = null;
-    if (metaData.projects && metaData.projects.length > 0) {
-      const projectMeta = metaData.projects[0];
-      // Try to find 'Task'
-      let targetType = projectMeta.issuetypes.find(it => it.name === 'Task');
-      if (!targetType) {
-        // Fallback to 'Story'
-        targetType = projectMeta.issuetypes.find(it => it.name === 'Story');
-      }
-      if (!targetType && projectMeta.issuetypes.length > 0) {
-        // Fallback to the first available non-subtask type
-        targetType = projectMeta.issuetypes.find(it => !it.subtask) || projectMeta.issuetypes[0];
-      }
-
-      if (targetType) {
-        issueTypeId = targetType.id;
-      }
-    }
-
-    if (!issueTypeId) {
-      console.error(`Could not find a valid issue type for project ${projectKey}`);
-      return { ticket: null, reason: `Could not find a valid issue type (Task/Story) in project ${projectKey}` };
-    }
-
-    // Find User to Assign (for notification)
+    // 3. Determine Target Issue (Create New vs Use Existing)
+    let issueId = null;
+    let issueKey = null;
     let accountIdToAssign = null;
-    let user = null;
 
-    // Priority 1: Use accountId if in schedule
+    // Find User (Common logic)
     if (schedule.accountId) {
       accountIdToAssign = schedule.accountId;
-      console.log(`Using stored accountId for schedule: ${schedule.accountId}`);
     } else {
-      // Priority 2: Search by email
       try {
-        console.log(`Searching for user with query: ${schedule.email}`);
         const userSearchResp = await asApp().requestJira(route`/rest/api/3/user/search?query=${schedule.email}`);
         const users = await userSearchResp.json();
+        const user = users.find(u => u.emailAddress === schedule.email) || users[0];
+        if (user) accountIdToAssign = user.accountId;
+      } catch (e) { console.error('Error finding user', e); }
+    }
 
-        // Try exact match first
-        user = users.find(u => u.emailAddress === schedule.email);
-
-        // Fallback: Use first result if it seems reasonable (and is active)
-        if (!user && users.length > 0) {
-          console.log(`Exact email match failed or email hidden. Using first result for query: ${users[0].displayName} (${users[0].accountId})`);
-          user = users[0];
-        }
-
-        if (user) {
-          accountIdToAssign = user.accountId;
-        } else {
-          console.warn(`No user found for email ${schedule.email}`);
-        }
-      } catch (e) {
-        console.error('Error finding user for assignment', e);
+    // --- DESTINATION: COMMENT ---
+    if (schedule.destination === 'comment' && schedule.targetIssueKey) {
+      console.log(`Destination is Comment on ${schedule.targetIssueKey}`);
+      const targetIssue = await getIssue(schedule.targetIssueKey);
+      if (!targetIssue) {
+        return { ticket: null, reason: `Target issue ${schedule.targetIssueKey} not found or not accessible.` };
       }
+      issueId = targetIssue.id;
+      issueKey = targetIssue.key;
+    }
+    // --- DESTINATION: CREATE ISSUE ---
+    else {
+      // Determine Project
+      let projectKey = null;
+      if (schedule.filters.project && schedule.filters.project.length > 0) {
+        projectKey = schedule.filters.project[0].key;
+      } else {
+        const projResp = await asApp().requestJira(route`/rest/api/3/project/search?maxResults=1`);
+        const projData = await projResp.json();
+        if (projData.values && projData.values.length > 0) projectKey = projData.values[0].key;
+      }
+
+      if (!projectKey) return { ticket: null, reason: 'No project found to create report issue.' };
+
+      // Valid Issue Type
+      const metaResp = await asApp().requestJira(route`/rest/api/3/issue/createmeta?projectKeys=${projectKey}`);
+      const metaData = await metaResp.json();
+      let issueTypeId = null;
+      if (metaData.projects && metaData.projects.length > 0) {
+        const pMeta = metaData.projects[0];
+        const t = pMeta.issuetypes.find(it => it.name === 'Task') || pMeta.issuetypes.find(it => it.name === 'Story') || pMeta.issuetypes[0];
+        if (t) issueTypeId = t.id;
+      }
+
+      if (!issueTypeId) return { ticket: null, reason: `No valid issue type in ${projectKey}` };
+
+      // Create Issue
+      const issueFields = {
+        project: { key: projectKey },
+        summary: `Developer Report Export - ${new Date().toISOString().split('T')[0]}`,
+        description: {
+          type: "doc",
+          version: 1,
+          content: [{ type: "paragraph", content: [{ type: "text", text: schedule.message || "Routine report generated." }] }]
+        },
+        issuetype: { id: issueTypeId }
+      };
+      if (accountIdToAssign) issueFields.assignee = { id: accountIdToAssign };
+
+      const createResp = await asApp().requestJira(route`/rest/api/3/issue`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: issueFields })
+      });
+
+      if (!createResp.ok) return { ticket: null, reason: `Failed to create issue: ${await createResp.text()}` };
+      const createdIssue = await createResp.json();
+      issueId = createdIssue.id;
+      issueKey = createdIssue.key;
     }
 
-    // Create Task as App
-    const issueFields = {
-      project: { key: projectKey },
-      summary: `Developer Report Export - ${new Date().toISOString().split('T')[0]}`,
-      description: {
-        type: "doc",
-        version: 1,
-        content: [
-          {
-            type: "paragraph",
-            content: [
-              {
-                type: "text",
-                text: `Routine report generated for ${schedule.email}. Please find the attached Excel file.`
-              }
-            ]
-          }
-        ]
-      },
-      issuetype: { id: issueTypeId }
-    };
-
-    if (accountIdToAssign) {
-      issueFields.assignee = { id: accountIdToAssign };
-    }
-
-    const createResp = await asApp().requestJira(route`/rest/api/3/issue`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        fields: issueFields
-      })
-    });
-
-    if (createResp.status === 400 || !createResp.ok) {
-      const err = await createResp.text();
-      console.error(`Failed to create issue: ${err}`);
-      return;
-    }
-
-    const createdIssue = await createResp.json();
-    const issueId = createdIssue.id;
-    const issueKey = createdIssue.key;
-    console.log(`Created report issue: ${issueKey}`);
-
-    // 4. Attach File as App
+    // 4. Attach File
     const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
     const filename = `Report_${new Date().toISOString().split('T')[0]}.xlsx`;
 
@@ -798,78 +756,56 @@ const processSchedule = async (schedule) => {
     const prefix = Buffer.from(data, 'utf-8');
     const fileContent = Buffer.from(excelBuffer);
     const suffix = Buffer.from(`\r\n--${boundary}--`, 'utf-8');
-
     const multipartBody = Buffer.concat([prefix, fileContent, suffix]);
 
-    const attachResp = await asApp().requestJira(route`/rest/api/3/issue/${issueId}/attachments`, {
+    await asApp().requestJira(route`/rest/api/3/issue/${issueId}/attachments`, {
       method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'X-Atlassian-Token': 'no-check',
-        'Content-Type': `multipart/form-data; boundary=${boundary}`
-      },
+      headers: { 'Accept': 'application/json', 'X-Atlassian-Token': 'no-check', 'Content-Type': `multipart/form-data; boundary=${boundary}` },
       body: multipartBody
     });
 
-    if (!attachResp.ok) {
-      console.error('Failed to attach file', await attachResp.text());
-    } else {
-      console.log('Attached excel report.');
-    }
+    // 5. Add Comment (Notification / Message)
+    // Even if we created the issue with description, adding a comment ensures notification (watcher/assignee often don't get 'create' email if self-assigned, but app-assigned might)
+    // If destination='comment', this IS the primary mechanism.
+    if (issueId) {
+      const msg = schedule.message || "Your scheduled report is ready! See the attachment in this ticket.";
 
-    // 5. Add Comment as App (triggers notification)
-    if (accountIdToAssign) {
+      // Construct simplified paragraph with mention
+      const content = [];
+      if (accountIdToAssign) {
+        content.push({ type: "mention", attrs: { id: accountIdToAssign, text: "@User" } });
+        content.push({ type: "text", text: " " });
+      }
+      content.push({ type: "text", text: msg });
+
       const adfComment = {
         body: {
           type: "doc",
           version: 1,
-          content: [
-            {
-              type: "paragraph",
-              content: [
-                { type: "mention", attrs: { id: accountIdToAssign, text: "@User" } },
-                { type: "text", text: " Your scheduled report is ready! See the attachment in this ticket." }
-              ]
-            }
-          ]
+          content: [{ type: "paragraph", content: content }]
         }
       };
 
-      const commentResp = await asApp().requestJira(route`/rest/api/3/issue/${issueId}/comment`, {
+      await asApp().requestJira(route`/rest/api/3/issue/${issueId}/comment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(adfComment)
       });
 
-      if (!commentResp.ok) {
-        console.error('Failed to add comment', await commentResp.text());
-      } else {
-        console.log('User mentioned.');
+      // 6. Watcher
+      if (accountIdToAssign) {
+        await asApp().requestJira(route`/rest/api/3/issue/${issueId}/watchers`, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify(accountIdToAssign)
+        });
       }
-
-      // 6. Add as Watcher (Triple check)
-      const watcherResp = await asApp().requestJira(route`/rest/api/3/issue/${issueId}/watchers`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(accountIdToAssign)
-      });
-      if (!watcherResp.ok) {
-        console.error('Failed to add watcher', await watcherResp.text());
-      } else {
-        console.log('User added as watcher.');
-      }
-    } else {
-      console.warn('Skipping notification: No accountIdToAssign found.');
     }
 
     return { ticket: issueKey };
-
   } catch (e) {
     console.error('Error processing schedule', e);
-    return { ticket: null, reason: e.message };
+    return { ticket: null, reason: e.message || 'Unknown error occurred in processSchedule' };
   }
 };
 
@@ -884,37 +820,29 @@ export const scheduler = async (event) => {
 
   for (let schedule of schedules) {
     if (!schedule.active) continue;
-
-    // Parse Scheduled Time (HH:MM in UTC as per UI label)
     if (!schedule.time) continue;
-    const [schedHour, schedMin] = schedule.time.split(':').map(Number);
 
-    // Check if within the current hour window (since trigger is hourly)
-    // We run if currentUtcHour matches schedHour. 
-    // This assumes the trigger runs reasonably close to the top of the hour.
-    // Limitation: If trigger runs at 17:59 and schedule is 17:00, it puts it at risk if it drifts.
-    // But for MVP hourly trigger, this is standard.
-    // Also check if already ran today to prevent retries or double sends if trigger runs multiple times (unlikely but safe).
+    const [schedHour, schedMin] = schedule.time.split(':').map(Number);
 
     // Check Last Run
     const lastRunDate = schedule.lastRun ? schedule.lastRun.split('T')[0] : null;
 
     let shouldRun = false;
 
-    if (schedule.frequency === 'daily') {
-      if (currentUtcHour === schedHour && lastRunDate !== todayStr) {
-        shouldRun = true;
-      }
-    } else if (schedule.frequency === 'weekly') {
-      const currentDay = now.getUTCDay(); // 0 = Sunday, 1 = Monday
-      // Assuming Weekly = Monday (1)
-      if (currentDay === 1 && currentUtcHour === schedHour && lastRunDate !== todayStr) {
-        shouldRun = true;
-      }
-    } else if (schedule.frequency === 'monthly') {
-      const currentDate = now.getUTCDate();
-      if (currentDate === 1 && currentUtcHour === schedHour && lastRunDate !== todayStr) {
-        shouldRun = true;
+    // Check Hour Match (Simple)
+    if (currentUtcHour === schedHour) {
+      if (schedule.frequency === 'daily') {
+        if (lastRunDate !== todayStr) shouldRun = true;
+      } else if (schedule.frequency === 'weekly') {
+        const currentDay = now.getUTCDay(); // 0 (Sun) - 6 (Sat)
+        // Default to Monday (1) if undefined
+        const targetDay = schedule.weekDay !== undefined ? schedule.weekDay : 1;
+        if (currentDay === targetDay && lastRunDate !== todayStr) shouldRun = true;
+      } else if (schedule.frequency === 'monthly') {
+        const currentDate = now.getUTCDate();
+        // Default to 1st if undefined
+        const targetDate = schedule.monthDate !== undefined ? schedule.monthDate : 1;
+        if (currentDate === targetDate && lastRunDate !== todayStr) shouldRun = true;
       }
     }
 
